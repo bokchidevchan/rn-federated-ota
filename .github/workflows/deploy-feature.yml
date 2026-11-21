@@ -22,6 +22,8 @@ on:
         required: true
       channel:
         description: 채널
+        type: choice
+        options: [prod]
         default: prod
         required: true
       canary:
@@ -33,10 +35,9 @@ permissions:
   contents: read
   id-token: write # OIDC 로 AWS 역할을 맡는 데 필요
 
-concurrency:
-  # 같은 채널 배포는 한 줄로 세운다. 매니페스트 조건부 쓰기가 있어 겹쳐도 안전하지만, 로그가 읽기 쉬워진다.
-  group: deploy-${{ inputs.channel || 'prod' }}
-  cancel-in-progress: false
+# concurrency 그룹을 두지 않는다. GitHub 은 그룹마다 대기 중인 실행을 하나만 남기고
+# 나머지를 취소하므로, 푸시가 몰리면 어떤 피처 배포가 조용히 빠진다.
+# 동시에 돌아도 매니페스트는 S3 조건부 쓰기로 보호된다(packages/ota-cli/src/manifestStore.ts).
 
 jobs:
   changed:
@@ -49,12 +50,16 @@ jobs:
           fetch-depth: 0
       - id: pick
         name: 바뀐 피처 고르기
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_FEATURE: ${{ inputs.feature }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo 'features=["${{ inputs.feature }}"]' >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            jq -nc --arg f "$INPUT_FEATURE" '[$f]' | sed 's/^/features=/' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          before="${{ github.event.before }}"
+          before="$BEFORE"
           # 새 브랜치 첫 푸시처럼 이전 커밋이 없으면 직전 커밋과 비교한다.
           git cat-file -e "$before" 2>/dev/null || before=HEAD^
           list=$(git diff --name-only "$before" HEAD -- features | cut -d/ -f2 | sort -u \
@@ -104,12 +109,14 @@ jobs:
         name: 업로드, 등록, 카나리
         env:
           OTA_STORE: s3://${{ vars.OTA_BUCKET }}
+          FEATURE_DIR: features/${{ matrix.feature }}
+          ACTOR: ${{ github.actor }}
         run: |
-          name=$(node -p "require('./features/${{ matrix.feature }}/package.json').ota.name")
-          dir=features/${{ matrix.feature }}
+          name=$(node -p "require('./$FEATURE_DIR/package.json').ota.name")
+          dir=$FEATURE_DIR
           out=$(npm run --silent ota -- publish "$name" --channel "$CHANNEL" --app "$dir" \
                   --android "$dir/build/generated/android" --ios "$dir/build/generated/ios" \
-                  --note "${GITHUB_SHA::7} by ${{ github.actor }}")
+                  --note "${GITHUB_SHA::7} by $ACTOR")
           id=$(echo "$out" | jq -r .releaseId)
           npm run --silent ota -- canary "$name" "$id" --ratio "$CANARY" --channel "$CHANNEL"
           echo "### $name → $id (카나리 $CANARY%)" >> "$GITHUB_STEP_SUMMARY"

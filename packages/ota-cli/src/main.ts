@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 
-import { bucketOf, promote, rollback, startCanary } from '@rn-federated-ota/core';
+import { bucketOf, ManifestError, promote, rollback, rollbackTarget, startCanary } from '@rn-federated-ota/core';
 import type { Platform } from '@rn-federated-ota/core';
 import { openStore } from '@rn-federated-ota/storage';
 
@@ -16,7 +16,7 @@ const HELP = `ota <명령> [옵션]
                                                   산출물 업로드 + 릴리스 등록(노출 안 함)
   canary  <피처> <릴리스> --ratio <1~99>           일부 사용자에게만 노출
   promote <피처> [릴리스]                          stable 로 올림(생략 시 진행 중인 카나리)
-  rollback <피처>                                  카나리 회수, 없으면 직전 stable 로
+  rollback <피처> [릴리스]                         카나리 회수, 없으면 직전 stable 로(생략 시 지금 상태 기준)
   status [피처]                                    채널 상태 출력
   bucket <피처> <사용자...>                         사용자의 카나리 버킷(0~99) 확인
 
@@ -87,14 +87,27 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'promote': {
       const feature = need(args[0], '피처 이름');
-      const m = await updateManifest(store(), channel, (cur, at) => promote(cur, feature, args[1], at));
+      const s = store();
+      // 대상 id 를 먼저 정해 고정한다. 재시도 때 "그사이 바뀐 카나리"를 올리지 않게.
+      const { manifest } = await readManifest(s, channel);
+      const state = manifest?.features[feature];
+      const target = args[1] ?? state?.canary?.releaseId;
+      if (!target) throw new ManifestError(`올릴 릴리스를 지정하세요. 진행 중인 카나리도 없습니다: ${feature}`);
+      if (state?.canary && state.canary.releaseId !== target) {
+        console.warn(`주의: 진행 중이던 카나리 ${state.canary.releaseId} 는 회수 없이 종료됩니다`);
+      }
+      const m = await updateManifest(s, channel, (cur, at) => promote(cur, feature, target, at));
       console.log(`${channel}/${feature}: stable = ${m.features[feature]!.stable}`);
       return;
     }
     case 'rollback': {
       const feature = need(args[0], '피처 이름');
-      const m = await updateManifest(store(), channel, (cur, at) => rollback(cur, feature, at));
-      console.log(`${channel}/${feature}: stable = ${m.features[feature]!.stable ?? '(없음)'}, canary = 없음`);
+      const s = store();
+      const { manifest } = await readManifest(s, channel);
+      if (!manifest) throw new ManifestError(`${channel}: 매니페스트가 없습니다`);
+      const target = args[1] ?? rollbackTarget(manifest, feature);
+      const m = await updateManifest(s, channel, (cur, at) => rollback(cur, feature, target, at));
+      console.log(`${channel}/${feature}: ${target} 회수, stable = ${m.features[feature]!.stable ?? '(없음)'}, canary = 없음`);
       return;
     }
     case 'status': {

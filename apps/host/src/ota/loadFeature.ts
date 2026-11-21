@@ -30,11 +30,14 @@ async function loadBypassingCache(name: string, expose: string): Promise<unknown
   await ScriptManager.shared.loadScript(name);
   const container = (globalThis as Record<string, any>)[name];
   if (!container) throw new Error(`${name}: 컨테이너를 받았지만 등록되지 않았습니다`);
-  const host = (globalThis as Record<string, any>).__otaFederationHost;
+  // 공유 스코프 없이 init 하면 피처가 호스트의 react 를 못 찾는다. 빈 객체로 대신하지 않고 멈춘다.
+  const shareScope = (globalThis as Record<string, any>).__otaFederationHost?.shareScopeMap?.default;
+  if (!shareScope) throw new Error(`${name}: 호스트 공유 스코프를 찾지 못했습니다`);
   try {
-    await container.init(host?.shareScopeMap?.default ?? {});
-  } catch {
-    // 이미 초기화된 컨테이너면 다시 init 할 때 던진다. 무시해도 된다.
+    await container.init(shareScope);
+  } catch (err) {
+    // 같은 공유 스코프로 이미 초기화된 컨테이너만 넘어간다. 그 외 실패는 그대로 올린다.
+    if (!/initiali[sz]ed/i.test(String((err as Error)?.message))) throw err;
   }
   const factory = await container.get(expose);
   return factory();

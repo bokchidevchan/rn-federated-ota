@@ -45,8 +45,16 @@ const server = createServer(async (req, res) => {
       status = out.status;
       res.writeHead(out.status, out.headers).end(out.body);
     } else if (url.pathname.startsWith('/releases/') && req.method === 'GET') {
-      const file = path.resolve(root, '.' + decodeURIComponent(url.pathname));
-      if (!file.startsWith(root + path.sep)) {
+      // %2f 처럼 인코딩된 구분자는 URL 파서가 정규화하지 않으므로, 디코딩한 뒤 다시 막는다.
+      // 그리고 releases/ 아래만 서빙한다. CloudFront 에서 매니페스트가 안 보이는 것과 맞춘다.
+      let decoded = '';
+      try {
+        decoded = decodeURIComponent(url.pathname);
+      } catch {
+        decoded = '..'; // 잘못된 % 인코딩은 아래에서 400 으로 막힌다.
+      }
+      const file = path.resolve(root, '.' + decoded);
+      if (decoded.includes('..') || decoded.includes('\\') || !file.startsWith(path.join(root, 'releases') + path.sep)) {
         status = 400;
         res.writeHead(400).end();
       } else {
@@ -74,6 +82,8 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(Number(values.port), () => {
+// 개발 머신 밖(같은 네트워크의 다른 기기)에서는 못 들어오게 루프백에만 연다.
+// Android 에뮬레이터의 10.0.2.2 는 개발 머신의 루프백으로 연결되므로 이걸로 충분하다.
+server.listen(Number(values.port), '127.0.0.1', () => {
   console.log(`ota 로컬 서버: http://localhost:${values.port} (저장소 ${root})`);
 });

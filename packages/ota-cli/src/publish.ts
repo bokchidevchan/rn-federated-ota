@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { addRelease, assertFeatureName } from '@rn-federated-ota/core';
 import type { Platform, Release, ReleaseFile } from '@rn-federated-ota/core';
+import { PreconditionFailedError } from '@rn-federated-ota/storage';
 import type { ObjectStore } from '@rn-federated-ota/storage';
 
 import { updateManifest } from './manifestStore.ts';
@@ -59,7 +60,7 @@ function contentTypeOf(file: string): string {
  * 같은 산출물을 두 번 올리면 해시는 같고 시각만 다르다.
  */
 function releaseIdOf(now: Date, files: Record<string, ReleaseFile[]>): string {
-  const stamp = now.toISOString().replace(/[-:]/g, '').slice(0, 13); // 20261122T0310
+  const stamp = now.toISOString().replace(/[-:]/g, '').slice(0, 15); // 20261122T031005
   const digest = createHash('sha256').update(JSON.stringify(files)).digest('hex').slice(0, 6);
   return `${stamp}-${digest}`;
 }
@@ -100,12 +101,22 @@ export async function publish(input: PublishInput): Promise<Release> {
 
   const id = releaseIdOf(now, platforms as Record<string, ReleaseFile[]>);
   for (const [rel, body] of bodies) {
-    await input.store.put(`releases/${input.feature}/${id}/${rel}`, body, {
-      contentType: contentTypeOf(rel),
-      cacheControl: IMMUTABLE,
-      // 이미 있는 릴리스 파일을 덮어쓰지 않는다. 캐시된 사본과 내용이 갈라지는 것을 막는다.
-      ifMatch: null,
-    });
+    const key = `releases/${input.feature}/${id}/${rel}`;
+    try {
+      await input.store.put(key, body, {
+        contentType: contentTypeOf(rel),
+        cacheControl: IMMUTABLE,
+        // 이미 있는 릴리스 파일을 덮어쓰지 않는다. 캐시된 사본과 내용이 갈라지는 것을 막는다.
+        ifMatch: null,
+      });
+    } catch (err) {
+      if (err instanceof PreconditionFailedError) {
+        throw new Error(
+          `${key} 가 이미 있습니다. 같은 산출물을 같은 초에 다시 올렸거나, 이전 업로드가 중간에 끊긴 경우입니다. 잠시 뒤 다시 publish 하세요`,
+        );
+      }
+      throw err;
+    }
   }
 
   const release: Release = {

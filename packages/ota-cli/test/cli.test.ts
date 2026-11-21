@@ -9,7 +9,7 @@ import { LocalObjectStore } from '@rn-federated-ota/storage';
 
 import { readManifest, updateManifest } from '../src/manifestStore.ts';
 import { publish } from '../src/publish.ts';
-import { runtimeVersionOf } from '../src/runtime.ts';
+import { computeRuntimeVersion, runtimeVersionOf } from '../src/runtime.ts';
 
 /** node_modules 까지 갖춘 가짜 피처 패키지를 만든다. 실제 RN 설치 없이 지문 계산을 시험하려고. */
 async function fakeFeature(dir: string, rnVersion = '0.76.9'): Promise<void> {
@@ -40,7 +40,7 @@ test('publish 는 파일을 올리고 릴리스를 등록만 한다 (아무에�
     outputs: { android: path.join(app, 'build/android') }, now: new Date('2026-11-22T03:10:00Z'),
   });
 
-  assert.match(release.id, /^20261122T0310-[0-9a-f]{6}$/);
+  assert.match(release.id, /^20261122T031000-[0-9a-f]{6}$/);
   assert.equal(release.runtimeVersion, await runtimeVersionOf(app));
   assert.deepEqual(release.platforms.android!.map(f => f.path), ['featureCart.container.js.bundle', 'src_Screen_js.chunk.bundle']);
 
@@ -60,7 +60,7 @@ test('같은 릴리스 파일은 덮어쓰지 않는다 (immutable)', async () =
   const { store, app } = await env();
   const opts = { store, channel: 'prod', feature: 'featureCart', appDir: app, outputs: { android: path.join(app, 'build/android') }, now: new Date('2026-11-22T03:10:00Z') };
   await publish(opts);
-  await assert.rejects(publish(opts), /조건부 쓰기 실패/);
+  await assert.rejects(publish(opts), /이미 있습니다/);
 });
 
 test('컨테이너 번들이 없으면 업로드 전에 멈춘다', async () => {
@@ -116,4 +116,14 @@ test('공유 의존성 버전이 다르면 런타임 지문이 다르다', async
   await fakeFeature(path.join(base, 'a'), '0.76.9');
   await fakeFeature(path.join(base, 'b'), '0.77.0');
   assert.notEqual(await runtimeVersionOf(path.join(base, 'a')), await runtimeVersionOf(path.join(base, 'b')));
+});
+
+test('런타임 지문은 입력 순서와 무관하고, 버전이 하나라도 다르면 바뀐다', () => {
+  const a = computeRuntimeVersion({ react: '18.3.1', 'react-native': '0.76.9' });
+  const b = computeRuntimeVersion({ 'react-native': '0.76.9', react: '18.3.1' });
+  const c = computeRuntimeVersion({ react: '18.3.2', 'react-native': '0.76.9' });
+  assert.equal(a, b);
+  assert.notEqual(a, c);
+  assert.match(a, /^rn0\.76\.9-[0-9a-f]{12}$/);
+  assert.throws(() => computeRuntimeVersion({}));
 });

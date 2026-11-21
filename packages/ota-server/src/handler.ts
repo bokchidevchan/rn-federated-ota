@@ -1,4 +1,4 @@
-import { assertChannelName, parseManifest, PLATFORMS, resolveAll } from '@rn-federated-ota/core';
+import { assertChannelName, manifestKey, parseManifest, PLATFORMS, resolveAll } from '@rn-federated-ota/core';
 import type { ChannelManifest, Platform, ResolveResponse } from '@rn-federated-ota/core';
 import type { ObjectStore } from '@rn-federated-ota/storage';
 
@@ -48,7 +48,7 @@ export function createResolveHandler({ store, cacheMs = 5_000, now = Date.now }:
   async function manifestOf(channel: string): Promise<ChannelManifest | null> {
     const hit = cache.get(channel);
     if (hit && now() - hit.at < cacheMs) return hit.manifest;
-    const obj = await store.get(`manifests/${channel}.json`);
+    const obj = await store.get(manifestKey(channel));
     const manifest = obj ? parseManifest(JSON.parse(obj.body.toString('utf8'))) : null;
     cache.set(channel, { at: now(), manifest });
     return manifest;

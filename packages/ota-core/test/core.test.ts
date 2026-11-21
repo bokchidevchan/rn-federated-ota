@@ -4,13 +4,13 @@ import assert from 'node:assert/strict';
 import {
   addRelease,
   bucketOf,
-  computeRuntimeVersion,
   emptyManifest,
   ManifestError,
   promote,
   resolveAll,
   resolveFeature,
   rollback,
+  rollbackTarget,
   startCanary,
 } from '../src/index.ts';
 import type { ChannelManifest, Release } from '../src/index.ts';
@@ -105,7 +105,7 @@ test('카나리 중 rollback 은 카나리만 거두고 그 릴리스를 회수�
   let m = withStable('r1');
   m = addRelease(m, 'featureCart', release('r2'), clock());
   m = startCanary(m, 'featureCart', 'r2', 50, clock());
-  m = rollback(m, 'featureCart', clock());
+  m = rollback(m, 'featureCart', 'r2', clock());
 
   const state = m.features.featureCart!;
   assert.equal(state.stable, 'r1');
@@ -116,13 +116,45 @@ test('카나리 중 rollback 은 카나리만 거두고 그 릴리스를 회수�
 
 test('stable rollback 은 직전 stable 로 돌아가고, 회수된 것은 다시 고르지 않는다', () => {
   let m = withStable('r1', 'r2', 'r3');
-  m = rollback(m, 'featureCart', clock());
+  m = rollback(m, 'featureCart', rollbackTarget(m, 'featureCart'), clock());
   assert.equal(m.features.featureCart!.stable, 'r2');
-  m = rollback(m, 'featureCart', clock());
+  m = rollback(m, 'featureCart', rollbackTarget(m, 'featureCart'), clock());
   assert.equal(m.features.featureCart!.stable, 'r1');
-  m = rollback(m, 'featureCart', clock());
+  m = rollback(m, 'featureCart', rollbackTarget(m, 'featureCart'), clock());
   assert.equal(m.features.featureCart!.stable, null);
-  assert.throws(() => rollback(m, 'featureCart', clock()), ManifestError);
+  assert.throws(() => rollbackTarget(m, 'featureCart'), ManifestError);
+});
+
+test('같은 rollback 을 두 번 적용해도 한 단계만 되돌린다 (재시도 안전)', () => {
+  // 카나리 중 rollback 이 두 번 적용되면, 두 번째가 stable 까지 회수하면 안 된다.
+  let m = withStable('r1', 'r2');
+  m = addRelease(m, 'featureCart', release('r3'), clock());
+  m = startCanary(m, 'featureCart', 'r3', 30, clock());
+  const once = rollback(m, 'featureCart', 'r3', clock());
+  const twice = rollback(once, 'featureCart', 'r3', clock());
+  assert.equal(twice, once);
+  assert.equal(twice.features.featureCart!.stable, 'r2');
+
+  // stable rollback 도 마찬가지다.
+  const s1 = rollback(once, 'featureCart', 'r2', clock());
+  const s2 = rollback(s1, 'featureCart', 'r2', clock());
+  assert.equal(s2, s1);
+  assert.equal(s2.features.featureCart!.stable, 'r1');
+});
+
+test('rollback 대상이 지금 카나리도 stable 도 아니면 거부한다', () => {
+  let m = withStable('r1', 'r2');
+  m = addRelease(m, 'featureCart', release('r3'), clock());
+  m = startCanary(m, 'featureCart', 'r3', 30, clock());
+  assert.throws(() => rollback(m, 'featureCart', 'r1', clock()), /카나리도 stable 도 아닙니다/);
+  assert.throws(() => rollback(m, 'featureCart', 'r2', clock()), /카나리를 먼저/);
+});
+
+test('같은 promote 를 두 번 적용해도 결과가 같다', () => {
+  let m = withStable('r1');
+  m = addRelease(m, 'featureCart', release('r2'), clock());
+  const once = promote(m, 'featureCart', 'r2', clock());
+  assert.equal(promote(once, 'featureCart', 'r2', clock()), once);
 });
 
 test('런타임이 다른 앱에는 stable 대신 런타임이 맞는 예전 stable 을 준다', () => {
@@ -178,16 +210,6 @@ test('순수 함수다: 입력 매니페스트를 고치지 않는다', () => {
   const before = JSON.stringify(m);
   const m2 = addRelease(m, 'featureCart', release('r2'), clock());
   startCanary(m2, 'featureCart', 'r2', 10, clock());
-  rollback(m, 'featureCart', clock());
+  rollback(m, 'featureCart', 'r1', clock());
   assert.equal(JSON.stringify(m), before);
-});
-
-test('런타임 지문은 입력 순서와 무관하고, 버전이 하나라도 다르면 바뀐다', () => {
-  const a = computeRuntimeVersion({ react: '18.3.1', 'react-native': '0.76.9' });
-  const b = computeRuntimeVersion({ 'react-native': '0.76.9', react: '18.3.1' });
-  const c = computeRuntimeVersion({ react: '18.3.2', 'react-native': '0.76.9' });
-  assert.equal(a, b);
-  assert.notEqual(a, c);
-  assert.match(a, /^rn0\.76\.9-[0-9a-f]{12}$/);
-  assert.throws(() => computeRuntimeVersion({}));
 });

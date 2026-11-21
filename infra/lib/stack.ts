@@ -20,6 +20,17 @@ export interface OtaStackProps extends cdk.StackProps {
    */
   githubRepo?: string;
   githubOidcProviderArn?: string;
+  /**
+   * 배포 역할을 맡을 수 있는 GitHub Environment 이름. 기본 ['prod'].
+   * 와일드카드(environment:*)를 쓰면 안 된다. 워크플로가 없는 Environment 이름을 적으면
+   * GitHub 이 보호 규칙 없는 Environment 를 새로 만들어 주므로, 승인 단계를 건너뛸 수 있다.
+   */
+  githubEnvironments?: string[];
+  /**
+   * resolve Lambda 의 예약 동시 실행 수. 폭주가 비용 폭주로 번지지 않게 묶는 안전장치다.
+   * 새 계정은 동시 실행 한도가 낮아(예: 10) 예약하면 배포가 실패하므로 기본은 비워 둔다.
+   */
+  reservedConcurrency?: number;
 }
 
 /**
@@ -57,9 +68,7 @@ export class OtaStack extends cdk.Stack {
       memorySize: 256,
       timeout: cdk.Duration.seconds(5),
       environment: { OTA_BUCKET: bucket.bucketName },
-      // 동시 실행을 묶어 둔다. 앱 시작마다 한 번 불리는 API 라 갑작스러운 폭주가
-      // 비용 폭주로 번지지 않게 하는 안전장치. 실제 트래픽에 맞게 조정한다.
-      reservedConcurrentExecutions: 50,
+      ...(props.reservedConcurrency ? { reservedConcurrentExecutions: props.reservedConcurrency } : {}),
       bundling: {
         format: OutputFormat.ESM,
         target: 'node22',
@@ -70,8 +79,19 @@ export class OtaStack extends cdk.Stack {
         banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
       },
     });
-    // Lambda 는 매니페스트만 읽는다. 번들 파일에 대한 권한도, 쓰기 권한도 없다.
-    bucket.grantRead(resolveFn, 'manifests/*');
+    // Lambda 는 매니페스트만 읽는다. grantRead 는 버킷 전체 목록 조회(s3:List*)까지 주므로
+    // 쓰지 않고 직접 적는다. ListBucket 은 manifests/ 접두사로만 준다. 이게 없으면 없는
+    // 채널의 매니페스트를 읽을 때 404 대신 403 이 와서 "빈 채널"로 처리할 수 없다.
+    resolveFn.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ['s3:GetObject'], resources: [bucket.arnForObjects('manifests/*')] }),
+    );
+    resolveFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [bucket.bucketArn],
+        conditions: { StringLike: { 's3:prefix': ['manifests/*'] } },
+      }),
+    );
 
     const resolveUrl = resolveFn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.AWS_IAM });
 
@@ -108,16 +128,16 @@ export class OtaStack extends cdk.Stack {
     });
 
     if (props.githubRepo) {
-      this.addGithubDeployRole(bucket, props.githubRepo, props.githubOidcProviderArn);
+      this.addGithubDeployRole(bucket, props.githubRepo, props.githubEnvironments ?? ['prod'], props.githubOidcProviderArn);
     }
   }
 
   /**
    * CI 배포 역할. 장기 액세스 키를 GitHub 에 저장하지 않고 OIDC 로 잠깐 맡는다.
-   * 이 저장소의 main 브랜치 실행과 GitHub Environment 실행만 맡을 수 있다.
-   * 권한은 번들 업로드와 매니페스트 읽기/쓰기뿐이다. 삭제 권한은 주지 않는다.
+   * 이 저장소의 main 브랜치 실행과, 이름을 정해 둔 GitHub Environment 실행만 맡을 수 있다.
+   * 권한은 번들 업로드와 매니페스트 읽기, 쓰기뿐이다. 삭제 권한은 주지 않는다.
    */
-  private addGithubDeployRole(bucket: s3.Bucket, repo: string, providerArn?: string): void {
+  private addGithubDeployRole(bucket: s3.Bucket, repo: string, environments: string[], providerArn?: string): void {
     const provider = providerArn
       ? iam.OpenIdConnectProvider.fromOpenIdConnectProviderArn(this, 'GithubOidc', providerArn)
       : new iam.OpenIdConnectProvider(this, 'GithubOidc', {
@@ -127,18 +147,34 @@ export class OtaStack extends cdk.Stack {
 
     const role = new iam.Role(this, 'GithubDeployRole', {
       assumedBy: new iam.WebIdentityPrincipal(provider.openIdConnectProviderArn, {
-        StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
         // main 브랜치 푸시(deploy-feature)와 승인 규칙이 걸린 Environment 실행(release-control)만.
         // Environment 를 쓰는 job 은 토큰 sub 가 ref 대신 environment 로 바뀌므로 둘 다 적는다.
-        StringLike: {
-          'token.actions.githubusercontent.com:sub': [`repo:${repo}:ref:refs/heads/main`, `repo:${repo}:environment:*`],
+        StringEquals: {
+          'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
+          'token.actions.githubusercontent.com:sub': [
+            `repo:${repo}:ref:refs/heads/main`,
+            ...environments.map(env => `repo:${repo}:environment:${env}`),
+          ],
         },
       }),
       maxSessionDuration: cdk.Duration.hours(1),
       description: 'rn-federated-ota CI deploy',
     });
     bucket.grantPut(role, 'releases/*');
-    bucket.grantReadWrite(role, 'manifests/*');
+    // grantReadWrite 는 s3:DeleteObject* 까지 준다. 버전 기록을 지울 수 없게 읽기와 쓰기만 따로 준다.
+    bucket.grantRead(role, 'manifests/*');
+    bucket.grantPut(role, 'manifests/*');
+
+    // 릴리스 파일은 "한 번 올리면 안 바뀐다"를 약속이 아니라 권한으로 강제한다.
+    // If-None-Match 없이(=덮어쓸 수 있게) 올리는 요청은 거부한다. CLI 는 항상 이 헤더를 붙인다.
+    role.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.DENY,
+        actions: ['s3:PutObject'],
+        resources: [bucket.arnForObjects('releases/*')],
+        conditions: { Null: { 's3:if-none-match': 'true' } },
+      }),
+    );
 
     new cdk.CfnOutput(this, 'GithubDeployRoleArn', { value: role.roleArn });
   }

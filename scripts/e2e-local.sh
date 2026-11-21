@@ -44,8 +44,15 @@ field() { # field <JSON> <피처> <키>
 echo "== 서버 시작 ($BASE, 저장소 $STORE_DIR)"
 node packages/ota-server/src/local.ts --port "$PORT" --store "$STORE_DIR" > "$STORE_DIR/server.log" 2>&1 &
 SERVER_PID=$!
-trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
-for _ in $(seq 1 50); do curl -s "$BASE/api/resolve" >/dev/null && break; sleep 0.1; done
+# 끝나면 서버를 내리고, 이 스크립트가 만든 임시 저장소도 지운다.
+trap 'kill $SERVER_PID 2>/dev/null || true; rm -rf "$STORE_DIR"' EXIT
+for _ in $(seq 1 50); do curl -s --max-time 1 "$BASE/api/resolve" >/dev/null && break; sleep 0.1; done
+# 포트가 이미 쓰이는 중이면 서버는 바로 죽는다. 엉뚱한 서버와 대화하지 않게 여기서 멈춘다.
+if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+  echo "서버가 뜨지 않았습니다. 포트 $PORT 가 쓰이는 중이면 PORT=다른번호 로 다시 실행하세요."
+  cat "$STORE_DIR/server.log"
+  exit 1
+fi
 
 RUNTIME="$(ota runtime-version apps/host)"
 echo "== 호스트 런타임 지문: $RUNTIME"
@@ -95,6 +102,7 @@ check "컨테이너 번들 200" "200" "$code"
 check "엔트리 번들(index.bundle)은 올라가 있지 않다" "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/${BP}index.bundle")"
 check "소스맵은 올라가 있지 않다" "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/${BP}featureCart.container.js.bundle.map")"
 check "경로 조작은 막힌다" "404" "$(curl -s -o /dev/null -w '%{http_code}' --path-as-is "$BASE/releases/../manifests/prod.json")"
+check "인코딩한 경로 조작도 막힌다" "400" "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/releases/..%2fmanifests%2fprod.json")"
 
 echo "== rollback (카나리 회수)"
 ota rollback featureCart >/dev/null

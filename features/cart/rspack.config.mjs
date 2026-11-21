@@ -26,7 +26,15 @@ const { name, expose } = pkg.ota;
 const shared = Object.fromEntries(
   pkg.ota.shared.map(dep => [
     dep,
-    { singleton: true, eager: false, requiredVersion: require(`${dep}/package.json`).version },
+    {
+      singleton: true,
+      eager: false,
+      requiredVersion: require(`${dep}/package.json`).version,
+      // 폴백 사본을 만들지 않는다. 기본값이면 호스트 것을 못 찾을 때 쓸 react-native 사본이
+      // 청크로 같이 빌드되고, 그게 로드되면 런타임이 두 벌이 되어 앱이 죽는다.
+      // 호스트 것이 없으면 차라리 로드가 실패하는 편이 낫다(호스트는 그 실패를 화면으로 보여 준다).
+      import: false,
+    },
   ]),
 );
 

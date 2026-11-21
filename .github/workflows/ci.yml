@@ -50,7 +50,7 @@ jobs:
       - name: 호스트 번들 빌드 (런타임 지문 생성 포함)
         run: npm run bundle:android
         working-directory: apps/host
-      - name: 호스트 타입 검사
-        run: npx tsc --noEmit
+      - name: 호스트 타입 검사 (런타임 지문 파일을 먼저 만든다)
+        run: npm run typecheck
         working-directory: apps/host
       - run: npm run e2e

@@ -13,12 +13,16 @@ on:
         description: 피처 이름 (예 featureCart)
         required: true
       release:
-        description: 릴리스 id (canary 는 필수, promote 는 생략하면 진행 중인 카나리)
+        description: 릴리스 id (canary 는 필수. promote 는 생략하면 진행 중인 카나리, rollback 은 생략하면 지금 카나리나 stable)
         required: false
       ratio:
         description: 카나리 비율 (canary 일 때)
         default: '20'
       channel:
+        # 자유 입력이면 없는 Environment 이름으로 승인 규칙을 건너뛸 수 있어 목록으로 고정한다.
+        # 채널을 늘리면 여기와 infra 의 githubEnvironments 를 같이 늘린다.
+        type: choice
+        options: [prod]
         default: prod
         required: true
 
@@ -26,9 +30,8 @@ permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: deploy-${{ inputs.channel }}
-  cancel-in-progress: false
+# 누른 버튼이 다른 실행에 밀려 취소되지 않도록 concurrency 그룹을 두지 않는다.
+# 겹쳐도 매니페스트는 조건부 쓰기로 보호되고, rollback, promote 는 대상 id 를 고정해 재시도에 안전하다.
 
 jobs:
   control:
@@ -56,9 +59,9 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
         run: |
           case "$ACTION" in
-            status)   npm run --silent ota -- status "$FEATURE" --channel "$CHANNEL" ;;
+            status)   ;; # 아래에서 출력한다
             canary)   npm run --silent ota -- canary "$FEATURE" "$RELEASE" --ratio "$RATIO" --channel "$CHANNEL" ;;
             promote)  npm run --silent ota -- promote "$FEATURE" $RELEASE --channel "$CHANNEL" ;;
-            rollback) npm run --silent ota -- rollback "$FEATURE" --channel "$CHANNEL" ;;
+            rollback) npm run --silent ota -- rollback "$FEATURE" $RELEASE --channel "$CHANNEL" ;;
           esac
           npm run --silent ota -- status "$FEATURE" --channel "$CHANNEL" | tee -a "$GITHUB_STEP_SUMMARY"

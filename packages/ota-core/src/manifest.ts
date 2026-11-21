@@ -172,6 +172,8 @@ export function promote(
   const release = findRelease(state, targetId);
   if (!release) throw new ManifestError(`없는 릴리스입니다: ${feature}/${targetId}`);
   if (release.revokedAt) throw new ManifestError(`회수된 릴리스는 올릴 수 없습니다: ${targetId}`);
+  // 같은 요청이 재시도로 두 번 적용돼도 결과가 같아야 한다(멱등).
+  if (state.stable === targetId && !state.canary) return m;
 
   const promoted: Release = { ...release, promotedAt: now.toISOString() };
   return withFeature(
@@ -183,32 +185,53 @@ export function promote(
 }
 
 /**
- * 되돌린다.
+ * 되돌린다. expectedId 는 "사람이 보고 되돌리려던 릴리스"다.
  *
  * - 카나리가 진행 중이면: 카나리만 거두고 그 릴리스를 회수한다. stable 은 그대로.
  * - 카나리가 없으면: 현재 stable 을 회수하고, 그 전에 stable 이었던 릴리스 중
  *   회수되지 않은 가장 최근 것으로 되돌린다.
  *
+ * expectedId 가 필요한 이유: 매니페스트 쓰기가 충돌하면 최신 상태를 다시 읽고 같은 변경을
+ * 다시 적용한다. "지금 것을 되돌려라"는 다시 적용하면 한 단계를 더 되돌린다(첫 쓰기가
+ * 사실 성공했는데 응답만 잃어버린 경우, 두 사람이 동시에 누른 경우). 대상 id 를 고정하면
+ * 두 번째 적용은 "이미 회수됨"을 보고 아무것도 하지 않는다.
+ *
  * 회수(revokedAt)를 남기는 이유: 포인터만 되돌리면, 런타임이 안 맞는 앱을 위한
  * 대체 경로(resolve.ts 의 fallback)가 문제의 릴리스를 다시 고를 수 있다.
  */
-export function rollback(m: ChannelManifest, feature: string, now: Date): ChannelManifest {
+export function rollback(m: ChannelManifest, feature: string, expectedId: string, now: Date): ChannelManifest {
   const state = featureOf(m, feature);
+  const target = findRelease(state, expectedId);
+  if (!target) throw new ManifestError(`없는 릴리스입니다: ${feature}/${expectedId}`);
+  if (target.revokedAt) return m; // 이미 되돌려졌다. 재시도라면 정상.
+
   const at = now.toISOString();
 
-  if (state.canary) {
-    const target = findRelease(state, state.canary.releaseId);
-    const releases = target ? replaceRelease(state, { ...target, revokedAt: at }) : state.releases;
+  if (state.canary?.releaseId === expectedId) {
+    const releases = replaceRelease(state, { ...target, revokedAt: at });
     return withFeature(m, feature, { ...state, releases, canary: null }, now);
   }
+  if (state.stable !== expectedId) {
+    throw new ManifestError(`${expectedId} 는 지금 카나리도 stable 도 아닙니다. status 로 상태를 다시 보세요`);
+  }
+  if (state.canary) {
+    throw new ManifestError(`카나리(${state.canary.releaseId})가 진행 중입니다. 카나리를 먼저 되돌리세요`);
+  }
 
-  const current = findRelease(state, state.stable);
-  if (!current) throw new ManifestError(`되돌릴 stable 이 없습니다: ${feature}`);
-
-  const releases = replaceRelease(state, { ...current, revokedAt: at });
+  const releases = replaceRelease(state, { ...target, revokedAt: at });
   const previous = releases
-    .filter(r => r.id !== current.id && r.promotedAt && !r.revokedAt)
+    .filter(r => r.id !== target.id && r.promotedAt && !r.revokedAt)
     .sort((a, b) => (a.promotedAt! < b.promotedAt! ? 1 : -1))[0];
 
   return withFeature(m, feature, { releases, stable: previous?.id ?? null, canary: null }, now);
 }
+
+/** 사람이 id 를 안 줬을 때 되돌릴 대상: 진행 중인 카나리, 없으면 stable. */
+export function rollbackTarget(m: ChannelManifest, feature: string): string {
+  const state = featureOf(m, feature);
+  const id = state.canary?.releaseId ?? state.stable;
+  if (!id) throw new ManifestError(`되돌릴 릴리스가 없습니다: ${feature}`);
+  return id;
+}
+
+export const manifestKey = (channel: string): string => `manifests/${channel}.json`;

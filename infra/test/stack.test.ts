@@ -45,28 +45,36 @@ test('Lambda 는 IAM 인증 Function URL 뒤에 있고, CloudFront 만 부를 �
   template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 2);
 });
 
-test('Lambda 의 S3 권한은 manifests/* 읽기뿐이다', () => {
+test('Lambda 의 S3 권한은 manifests/ 아래 읽기와 목록뿐이다', () => {
   const policies = template.findResources('AWS::IAM::Policy');
   const lambdaPolicy = Object.entries(policies).find(([id]) => id.startsWith('ResolveServiceRoleDefaultPolicy'));
   assert.ok(lambdaPolicy, 'Lambda 정책이 있어야 한다');
-  const text = JSON.stringify(lambdaPolicy[1]);
-  assert.match(text, /manifests\/\*/);
-  assert.doesNotMatch(text, /s3:PutObject|s3:DeleteObject/);
-  assert.doesNotMatch(text, /releases\//);
+  const statements = (lambdaPolicy[1] as { Properties: { PolicyDocument: { Statement: { Action: string | string[]; Condition?: unknown }[] } } })
+    .Properties.PolicyDocument.Statement;
+  const actions = statements.flatMap(s => [s.Action].flat());
+  assert.deepEqual(actions.sort(), ['s3:GetObject', 's3:ListBucket']);
+  const list = statements.find(s => [s.Action].flat().includes('s3:ListBucket'))!;
+  assert.deepEqual(list.Condition, { StringLike: { 's3:prefix': ['manifests/*'] } });
+  assert.doesNotMatch(JSON.stringify(statements), /releases\//);
 });
 
-test('CI 역할은 이 저장소의 main 브랜치나 Environment OIDC 로만 맡을 수 있고 삭제 권한이 없다', () => {
+test('예약 동시 실행은 기본으로 걸지 않는다 (새 계정에서 첫 배포 실패 방지)', () => {
+  const fns = Object.values(template.findResources('AWS::Lambda::Function')) as { Properties: Record<string, unknown> }[];
+  assert.ok(fns.every(f => f.Properties.ReservedConcurrentExecutions === undefined));
+});
+
+test('CI 역할은 main 브랜치와 이름을 정한 Environment 의 OIDC 로만 맡을 수 있다 (와일드카드 없음)', () => {
   template.hasResourceProperties('AWS::IAM::Role', {
     AssumeRolePolicyDocument: {
       Statement: [
         Match.objectLike({
           Action: 'sts:AssumeRoleWithWebIdentity',
           Condition: {
-            StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
-            StringLike: {
+            StringEquals: {
+              'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
               'token.actions.githubusercontent.com:sub': [
                 'repo:example/rn-federated-ota:ref:refs/heads/main',
-                'repo:example/rn-federated-ota:environment:*',
+                'repo:example/rn-federated-ota:environment:prod',
               ],
             },
           },
@@ -74,7 +82,15 @@ test('CI 역할은 이 저장소의 main 브랜치나 Environment OIDC 로만 �
       ],
     },
   });
+  const roles = JSON.stringify(template.findResources('AWS::IAM::Role'));
+  assert.doesNotMatch(roles, /environment:\*/);
+});
+
+test('CI 역할은 삭제 권한이 없고, 릴리스 파일은 덮어쓰기 없는 업로드만 허용한다', () => {
   const ciPolicy = Object.entries(template.findResources('AWS::IAM::Policy')).find(([id]) => id.startsWith('GithubDeployRole'));
   assert.ok(ciPolicy);
-  assert.doesNotMatch(JSON.stringify(ciPolicy[1]), /s3:DeleteObject"/);
+  const text = JSON.stringify(ciPolicy[1]);
+  assert.doesNotMatch(text, /s3:DeleteObject/);
+  assert.match(text, /"Effect":"Deny"/);
+  assert.match(text, /s3:if-none-match/);
 });
