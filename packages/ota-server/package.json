@@ -1,0 +1,15 @@
+{
+  "name": "@rn-federated-ota/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "resolve API. Lambda 진입점과 로컬 검증 서버가 같은 핸들러를 쓴다",
+  "exports": {
+    "./handler": "./src/handler.ts",
+    "./lambda": "./src/lambda.ts"
+  },
+  "dependencies": {
+    "@rn-federated-ota/core": "0.1.0",
+    "@rn-federated-ota/storage": "0.1.0"
+  }
+}

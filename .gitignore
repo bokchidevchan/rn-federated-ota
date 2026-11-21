@@ -1,0 +1,5 @@
+node_modules/
+.ota-storage/
+*.log
+.DS_Store
+infra/cdk.out/

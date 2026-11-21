@@ -1,0 +1,64 @@
+name: release-control
+
+# 사람이 누르는 버튼. 카나리 비율 조정, stable 승격, 롤백.
+# 매니페스트 포인터만 바꾸므로 몇 초 안에 끝나고, 앱은 다음 콜드 스타트부터 새 결정을 받는다.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        options: [status, canary, promote, rollback]
+        required: true
+      feature:
+        description: 피처 이름 (예 featureCart)
+        required: true
+      release:
+        description: 릴리스 id (canary 는 필수, promote 는 생략하면 진행 중인 카나리)
+        required: false
+      ratio:
+        description: 카나리 비율 (canary 일 때)
+        default: '20'
+      channel:
+        default: prod
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    # 운영 채널은 GitHub Environment 승인 규칙을 걸어 두는 것을 권한다.
+    environment: ${{ inputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: 실행
+        env:
+          OTA_STORE: s3://${{ vars.OTA_BUCKET }}
+          ACTION: ${{ inputs.action }}
+          FEATURE: ${{ inputs.feature }}
+          RELEASE: ${{ inputs.release }}
+          RATIO: ${{ inputs.ratio }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          case "$ACTION" in
+            status)   npm run --silent ota -- status "$FEATURE" --channel "$CHANNEL" ;;
+            canary)   npm run --silent ota -- canary "$FEATURE" "$RELEASE" --ratio "$RATIO" --channel "$CHANNEL" ;;
+            promote)  npm run --silent ota -- promote "$FEATURE" $RELEASE --channel "$CHANNEL" ;;
+            rollback) npm run --silent ota -- rollback "$FEATURE" --channel "$CHANNEL" ;;
+          esac
+          npm run --silent ota -- status "$FEATURE" --channel "$CHANNEL" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,29 @@
+{
+  "name": "rn-federated-ota",
+  "private": true,
+  "description": "React Native 원격 번들(Module Federation)을 S3와 CloudFront로 배포하고, 채널, 카나리, 롤백을 resolve API로 결정하는 샘플",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/ota-core",
+    "packages/ota-storage",
+    "packages/ota-cli",
+    "packages/ota-server",
+    "infra"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"packages/*/test/*.test.ts\"",
+    "ota": "node packages/ota-cli/src/main.ts",
+    "server": "node packages/ota-server/src/local.ts",
+    "synth": "npm run synth -w infra",
+    "e2e": "bash scripts/e2e-local.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

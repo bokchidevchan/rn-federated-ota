@@ -1,0 +1,14 @@
+{
+  "name": "@rn-federated-ota/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "피처 번들 업로드, 카나리, promote, rollback 을 하는 배포 CLI",
+  "bin": {
+    "ota": "./src/main.ts"
+  },
+  "dependencies": {
+    "@rn-federated-ota/core": "0.1.0",
+    "@rn-federated-ota/storage": "0.1.0"
+  }
+}

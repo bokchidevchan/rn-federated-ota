@@ -1,0 +1,15 @@
+import * as cdk from 'aws-cdk-lib';
+
+import { OtaStack } from '../lib/stack.ts';
+
+const app = new cdk.App();
+
+// cdk deploy -c githubRepo=<owner>/<repo> 처럼 넘기면 CI 배포 역할까지 만든다.
+const githubRepo = app.node.tryGetContext('githubRepo') as string | undefined;
+const githubOidcProviderArn = app.node.tryGetContext('githubOidcProviderArn') as string | undefined;
+
+new OtaStack(app, 'RnFederatedOta', {
+  ...(githubRepo ? { githubRepo } : {}),
+  ...(githubOidcProviderArn ? { githubOidcProviderArn } : {}),
+  env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+});

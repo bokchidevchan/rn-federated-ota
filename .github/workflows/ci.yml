@@ -1,0 +1,56 @@
+name: ci
+
+# 모든 푸시와 PR 에서 돈다. AWS 자격 증명 없이 끝까지 검증할 수 있는 것만 둔다.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline:
+    name: 배포 도구, 인프라
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: 단위 테스트 (core, storage, cli, server)
+        run: npm test
+      - name: 인프라 테스트 (CDK assertions)
+        run: npm test -w infra
+      - name: CDK synth
+        run: npm run synth
+
+  e2e:
+    name: 로컬 end-to-end (피처 빌드 → 배포 → 카나리 → 롤백)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/host/package-lock.json
+            features/*/package-lock.json
+      - run: npm ci
+      - run: npm ci
+        working-directory: apps/host
+      - run: npm ci
+        working-directory: features/cart
+      - run: npm ci
+        working-directory: features/profile
+      - name: 호스트 번들 빌드 (런타임 지문 생성 포함)
+        run: npm run bundle:android
+        working-directory: apps/host
+      - name: 호스트 타입 검사
+        run: npx tsc --noEmit
+        working-directory: apps/host
+      - run: npm run e2e

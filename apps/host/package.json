@@ -1,0 +1,41 @@
+{
+  "name": "ota-host",
+  "version": "1.0.0",
+  "private": true,
+  "description": "호스트 앱. RN 런타임과 공유 의존성을 소유하고, 피처 번들은 세션 시작 때 resolve API 가 고른 릴리스를 CDN 에서 받는다",
+  "ota": {
+    "shared": [
+      "react",
+      "react-native"
+    ]
+  },
+  "scripts": {
+    "runtime": "node ../../packages/ota-cli/src/main.ts runtime-version . --write src/ota/runtimeVersion.generated.ts",
+    "bundle:android": "npm run runtime && react-native webpack-bundle --platform android --dev false --entry-file index.js --bundle-output android/app/src/main/assets/index.android.bundle --sourcemap-output build/index.android.bundle.map --assets-dest android/app/src/main/res",
+    "build:android": "npm run bundle:android && cd android && ./gradlew assembleRelease",
+    "typecheck": "npm run runtime && tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-native": "0.76.9"
+  },
+  "devDependencies": {
+    "@babel/core": "7.29.7",
+    "@babel/preset-env": "^7.25.3",
+    "@babel/runtime": "^7.25.0",
+    "@callstack/repack": "5.3.0",
+    "@module-federation/enhanced": "0.9.1",
+    "@react-native-community/cli": "15.1.3",
+    "@react-native-community/cli-platform-android": "15.1.3",
+    "@react-native/babel-preset": "0.76.9",
+    "@react-native/typescript-config": "0.76.9",
+    "@rspack/core": "1.7.12",
+    "@swc/helpers": "0.5.23",
+    "@types/node": "^22.20.5",
+    "@types/react": "^18.2.6",
+    "typescript": "5.7.3"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

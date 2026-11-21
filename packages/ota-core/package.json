@@ -1,0 +1,10 @@
+{
+  "name": "@rn-federated-ota/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "매니페스트 연산과 resolve 정책. 의존성 없는 순수 함수만 둔다",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
